@@ -1,163 +1,151 @@
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 import tweepy
+from tweepy import TweepyException
+import time
+from tweepy.errors import TwitterServerError, TooManyRequests
 
-# --- Twitter API keys ---
-bearer_token = "AAAAAAAAAAAAAAAAAAAAAKnU0QEAAAAA%2BXDLHNtDYv7zLy9z%2BCBHHOcDM0A%3DXUsbdDHb9CMaaFNmq72JuEeUuRDVUIRzWMLNJ1xYBGTyxxJYDX"
-consumer_key = "Ux7ZFOV391n4oPiSM7aFprXBZ"
-consumer_secret = "lVHb3J8lqjmzHX7ksi2oGinhHbfrr6PNE1Tp1nFdivEzBm5zGD"
-access_token = "1909115498278641664-V25HblmI2Ek85nbPOcIRsc0EqdT0Zk"
-access_token_secret = "IcH9e4ADMpAlmFyPr8vWH2sABEvImrvN5iINYm4m1X09x"
+# Twitter API credentials
+bearer_token = "AAAAAAAAAAAAAAAAAAAAAI0K8wEAAAAAylGDq1uihyPar%2FSVOpAa4QwKIA8%3DUTHnPNxAsQyo7X35ZYxBrygRrIqLyTJ1YqZSwtRyZpgkNncHIe"
+consumer_key = "QRe7vcK9pU42YKWKIZcaBp2ST"
+consumer_secret = "sMtnLEmhR4zyXz2W6YHNevbV0O4aq7Vo79U5mtgZfNrz0bYIPP"
+access_token = "1909115498278641664-c8hLluovLk28BjNTID2IsPzRl9p061"
+access_token_secret = "YcfpvW2ntbRQfGnmJAXr5ArbYpocpJ60d2lNVqGTya996"
 
-# --- Authenticate with Twitter ---
+# Authenticate to Twitter
 client = tweepy.Client(
-    consumer_key=consumer_key,
-    consumer_secret=consumer_secret,
-    access_token=access_token,
-    access_token_secret=access_token_secret
+    bearer_token=bearer_token, consumer_key=consumer_key, consumer_secret=consumer_secret, 
+    access_token=access_token, access_token_secret=access_token_secret
 )
 
-BROWSERLESS_WS_ENDPOINT = "wss://chrome.browserless.io?token=SCu5irZ0a6iZKpd039838ed2d59a3a2b169ff5c501"
+# Function to post a tweet
+# def post_tweet(tweet_text):
+#     try:
+#         tweet = tweet_text
+        
+#         response = client.create_tweet(text=tweet)
+#         print("Tweet posted successfully!")
+#         print("Response:", response)
+#     except TweepyException as e:
+#         print(f"An error occurred: {e}")
 
-# Get 22K/24K Gold and Silver price in INR (Scraped from goodreturns.in) ---
-def get_metal_value():
-    # 24K and 22K gold prices
-    g_24k = ''
-    g_22k = ''
+def post_tweet(tweet_text, retries=5):
+    for attempt in range(retries):
+        try:
+            response = client.create_tweet(text=tweet_text)
+            print("✅ Tweet posted successfully!")
+            return response
+
+        except TwitterServerError as e:
+            wait_time = (2 ** attempt) * 5  # exponential backoff
+            print(f"⚠️ Server error (503). Retry in {wait_time}s...")
+            time.sleep(wait_time)
+
+        except TooManyRequests as e:
+            print("⛔ Rate limit hit. Sleeping for 15 minutes...")
+            time.sleep(900)
+
+        except Exception as e:
+            print("❌ Unexpected error:", e)
+            break
+
+    print("🚫 Failed after retries.")
+
+# --- Scrape data ---
+def get_data():
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(BROWSERLESS_WS_ENDPOINT)
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 720},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
         )
 
         page = context.new_page()
+
+        # ---------- GOLD ----------
         page.goto("https://www.goodreturns.in/gold-rates/chennai.html", wait_until="domcontentloaded")
-        page.wait_for_selector("#moneyweb-wrapper #moneyweb-leftPanel .gold-rate-container .gold-each-container", timeout=15000)
+        page.wait_for_timeout(6000)
 
-        # Query all elements
-        elements = page.query_selector_all("#moneyweb-wrapper #moneyweb-leftPanel .gold-rate-container .gold-each-container")
+        elements = page.query_selector_all(".gold-each-container")
+        print("Gold elements:", len(elements))
 
-        # store their text content
+        g_24k, g_22k = "", ""
         for idx, el in enumerate(elements):
-            # type = el.query_selector_all('.gold-common-head')[0].inner_text()
-            price = el.query_selector_all('.gold-common-head')[1].inner_text()
-            # print(f"{type} Gold price is: {price}")
-            if idx == 0:
-                g_22k = price
-            elif idx == 1:
-                g_24k = price
-            else:
-                break
+            items = el.query_selector_all('.gold-common-head')
+            if len(items) > 1:
+                price = items[1].inner_text()
+                if idx == 0:
+                    g_24k = price
+                elif idx == 1:
+                    g_22k = price
 
-        browser.close()
-
-    # Silver price
-    silver_1g = ''
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(BROWSERLESS_WS_ENDPOINT)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 720},
-        )
-
-        page = context.new_page()
+        # ---------- SILVER ----------
         page.goto("https://www.goodreturns.in/silver-rates/chennai.html", wait_until="domcontentloaded")
-        page.wait_for_selector("#moneyweb-wrapper #moneyweb-leftPanel .gold-rate-container .gold-each-container", timeout=15000)
+        page.wait_for_timeout(6000)
 
-        # Query all elements
-        elements = page.query_selector_all("#moneyweb-wrapper #moneyweb-leftPanel .gold-rate-container .gold-each-container")
+        elements = page.query_selector_all(".gold-each-container")
+        print("Silver elements:", len(elements))
 
-        # store their text content
-        for idx, el in enumerate(elements):
-            # type = el.query_selector_all('.gold-common-head')[0].inner_text()
-            price = el.query_selector_all('.gold-common-head')[1].inner_text()
-            # print(f"{type} price is: {price}")
-            if idx == 0:
-                silver_1g = price
-            else:
-                break
+        silver = ""
+        if len(elements) > 0:
+            items = elements[0].query_selector_all('.gold-common-head')
+            if len(items) > 1:
+                silver = items[1].inner_text()
 
-        browser.close()
-
-    return g_24k, g_22k, silver_1g
-
-# --- Get Market Data ---
-def get_financial_data():
-    # USD/INR value
-    usd_inr = ""
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(BROWSERLESS_WS_ENDPOINT)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 720},
-        )
-
-        page = context.new_page()
-        # page.goto("https://www.goodreturns.in/currency/indian-rupee-inr-to-united-states-dollar-usd-converter.html", wait_until="domcontentloaded")
+        # ---------- USD/INR ----------
         page.goto("https://www.goodreturns.in/currency/united-states-dollar-usd-to-indian-rupee-inr-converter.html", wait_until="domcontentloaded")
-        page.wait_for_selector("#moneyweb-wrapper #moneyweb-leftPanel .currency-converter-container", timeout=15000)
+        page.wait_for_timeout(6000)
 
-        # Query all elements
-        elements = page.query_selector_all("#moneyweb-wrapper #moneyweb-leftPanel .currency-converter-container .result .gr-green-color")
+        try:
+            usd_inr = float(page.query_selector(".gr-green-color").inner_text())
+        except:
+            usd_inr = 0
 
-        # store their text content
-        for idx, el in enumerate(elements):
-            if idx == 0:
-                value = el.inner_text()
-                usd_inr = round(float(value), 2)
-                # value = 1/float(el.inner_text())
-                # print(f"1 USD = ₹{round(value, 2)} INR")
-                # usd_inr = round(value, 2)
-            else:
-                break
-        browser.close()
-    
-    # nifty 50 value
-    nifty = ""
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(BROWSERLESS_WS_ENDPOINT)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 720},
-        )
-
-        page = context.new_page()
+        # ---------- NIFTY ----------
         page.goto("https://www.goodreturns.in/nse/", wait_until="domcontentloaded")
-        page.wait_for_selector("#moneyweb-wrapper #moneyweb-leftPanel .moneyweb-tabsContent", timeout=15000)
+        page.wait_for_timeout(6000)
 
-        # Query all elements
-        elements = page.query_selector_all("#moneyweb-wrapper #moneyweb-leftPanel .moneyweb-tabsContent table tbody tr")
+        rows = page.query_selector_all(".moneyweb-tabsContent table tbody tr")
 
-        # store their text content
-        nifty = elements[4].query_selector_all('td')[1].inner_text()
-        # print(f"Nifty 50: {value}")
+        nifty = ""
+        if len(rows) > 4:
+            cols = rows[4].query_selector_all("td")
+            if len(cols) > 1:
+                nifty = cols[1].inner_text()
+
         browser.close()
 
-    return usd_inr, nifty
+    return g_24k, g_22k, silver, round(usd_inr, 2), nifty
 
-# --- Format and Tweet ---
-def post_market_update():
-    date_str = datetime.now().strftime("%d %b %Y")
-    gold_24k, gold_22k, silver = get_metal_value()
-    usd_inr, nifty = get_financial_data()
-    tweet = f"""{date_str} - Market Captured 📊:
+# --- Main ---
+def main():
+    try:
+        date_str = datetime.now().strftime("%d %b %Y")
+
+        gold_24k, gold_22k, silver, usd_inr, nifty = get_data()
+
+        tweet = f"""{date_str} - Market Captured 📊:
 
 🪙 Gold 24K → {gold_24k} /g
 🪙 Gold 22K → {gold_22k} /g
 ⚪ Silver → {silver} /g
 💵 $1 USD → ₹{usd_inr} INR
-📈 Nifty 50 → {nifty}
 
 🔔 Follow @GetMarketPulse 🔁 Auto-Updated daily!
-#GoldRate #SilverRate #DollarRate #Nifty50
+#GoldRate #SilverRate #DollarRate
 """
 
-    # tweet = "Hi, Test tweet!"
-    response = client.create_tweet(text=tweet)
-    print("Tweet ID:", response.data["id"])
-    print("✅ Tweet posted successfully!")
-    print(tweet)
+        print("Tweet Preview:\n", tweet)
+        post_tweet(tweet)
 
-# --- Run it ---
-post_market_update()
+        print("✅ Tweet posted!")
+
+    except Exception as e:
+        print("❌ Error:", e)
+
+# --- Run ---
+if __name__ == "__main__":
+    main()
